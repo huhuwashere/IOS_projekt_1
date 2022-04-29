@@ -1,0 +1,264 @@
+#!/bin/sh
+
+export POSIXLY_CORRECT=yes
+export LC_NUMERIC=en_US.UTF-8
+
+print_help(){
+  echo "Usage: tradelog [-h|--help]"
+  echo "       tradelog [FILTER...] [COMMAND] [LOG...]"
+  echo " "
+  echo "commands: "
+  echo "  list-tick – výpis seznamu vyskytujících se burzovních symbolů, tzv. tickerů."
+  echo "  profit – výpis celkového zisku z uzavřených pozic."
+  echo "  pos – výpis hodnot aktuálně držených pozic seřazených sestupně dle hodnoty."
+  echo "  last-price – výpis poslední známé ceny pro každý ticker."
+  echo "  hist-ord – výpis histogramu počtu transakcí dle tickeru."
+  echo "  graph-pos – výpis grafu hodnot držených pozic dle tickeru."
+  echo ""
+  echo "OPTIONS"
+  echo "        -a DATETIME – after: jsou uvažovány pouze záznamy PO tomto datu (bez tohoto data). DATETIME je formátu YYYY-MM-DD HH:MM:SS."
+  echo "        -b DATETIME – before: jsou uvažovány pouze záznamy PŘED tímto datem (bez tohoto data)."
+  echo "        -t TICKER – jsou uvažovány pouze záznamy odpovídající danému tickeru. Při více výskytech přepínače se bere množina všech uvedených tickerů."
+  echo "        -w WIDTH – u výpisu grafů nastavuje jejich šířku, tedy délku nejdelšího řádku na WIDTH. Tedy, WIDTH musí být kladné celé číslo. Více výskytů přepínače je chybné spuštění."
+  echo "        -h a --help vypíšou nápovědu s krátkým popisem každého příkazu a přepínače."
+}
+
+COMMAND=""
+DATE_A="0000-00-00 00:00:00"
+DATE_B="9999-12-31 23:59:59"
+WIDTHGP=1000;
+WIDTHO="";
+
+
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+    list-tick | pos | profit | last-price | hist-ord | graph-pos)
+      COMMAND="$1"
+      shift
+      ;;
+
+    -h)
+      print_help
+      exit 0
+      ;;
+
+    --help)
+      print_help
+      exit 0
+      ;;
+
+    -w)
+      WIDTHGP="$2";
+      WIDTHO="$2";
+      shift
+      shift
+      ;;
+    -a)
+      DATE_A="$2"
+      echo "$DATE_A"
+      shift
+      shift
+      ;;
+    -b)
+      DATE_B="$2"
+      echo "$DATE_B"
+      shift
+      shift
+      ;;
+    -t)
+      TICKER="$2 $TICKER"
+      shift
+      shift
+      ;;
+    *)
+      FILE="$1"
+      extension="${FILE##*.}"
+      filename="${filename%.*}"
+      shift
+
+      if [ "$extension" = "log" ]; then
+        SUBOR="$FILE"
+      fi
+
+      if [ "$extension" = "gz" ]; then
+        SUBOR="$FILE"
+      fi
+      ;;
+  esac
+done
+
+if [ "$COMMAND" = "list-tick" ]; then
+    awk -F ';' -v date_a="$DATE_A" -v date_b="$DATE_B" '{ if($1<date_b && $1>date_a)  } {print $2}' "$SUBOR" | sort -u
+fi
+
+if [ "$COMMAND" = "profit" ]; then
+
+    awk -F ';' -v date_a="$DATE_A" -v date_b="$DATE_B" '{
+
+    if($1<date_b && $1>date_a){
+      if ($3 == "sell"){
+        SUM = SUM + ($4 * $6)
+      } else{
+        SUM = SUM - ($4 * $6)
+      }
+    } }; END {printf "%.2f\n", SUM}' "$SUBOR"
+
+fi
+
+if [ "$COMMAND" = "pos" ]; then
+
+    awk -F ';' -v date_a="$DATE_A" -v date_b="$DATE_B" '{
+
+     if($1<date_b && $1>date_a){
+      if(objem[$2] == ""){
+        if($3 == "buy"){
+          objem[$2] = $6
+          cena[$2] = $4 * objem[$2]
+        }else{
+          objem[$2] = 0 - $6
+          cena[$2] = $4 * objem[$2]
+        }
+      } else{
+        if($3 == "buy"){
+          objem[$2] = objem[$2] + $6
+          cena[$2] = $4 * objem[$2]
+        }else{
+         objem[$2] = objem[$2] - $6
+         cena[$2] = $4 * objem[$2]
+        }
+      }
+    }
+  };
+
+    END {
+
+    for(val in objem)
+      printf "%-9s : %11.2f \n", val, cena[val]
+    }'  "$SUBOR" | sort -u -k1,1 |sort -n -k2,2 -t ':' -r
+fi
+
+if [ "$COMMAND" = "last-price" ]; then
+    awk -F ';' -v date_a="$DATE_A" -v date_b="$DATE_B" '{
+    if($1<date_b && $1>date_a){
+      cena[$2] = $4
+    }
+    };
+
+    END {
+    for(val in cena)
+      printf "%-9s : %7.2f \n", val, cena[val]
+    }'  "$SUBOR" | sort -u -k1,1
+fi
+
+if [ "$COMMAND" = "hist-ord" ]; then
+    awk -F ';' -v width="$WIDTHO" -v date_a="$DATE_A" -v date_b="$DATE_B" '{
+
+    if($1<date_b && $1>date_a){
+      if(ticker[$2] == ""){
+        ticker[$2] = 1
+      } else{
+       ticker[$2]++
+      }
+    }
+    };
+
+      END{
+
+        max = 0;
+
+      for(val in ticker){
+          ticker[val] = (ticker[val])*(ticker[val])
+          ticker[val] = sqrt(ticker[val])
+
+          if(ticker[val] > max){
+            max = ticker[val]
+          }
+      }
+
+      if(width == ""){
+        width = max
+      }
+
+        for(val in ticker){
+
+          printf "%-9s : ", val
+          vysledok = ticker[val] * width / max
+
+          for(i = 0; i < vysledok; i++){
+            printf "#"
+          }
+          printf "\n"
+        }
+
+   }' "$SUBOR" | sort -k1,1
+fi
+
+if [ "$COMMAND" = "graph-pos" ]; then
+   awk -F ';'  -v width="$WIDTHGP" '{
+
+    if(objem[$2] == ""){
+      if($3 == "buy"){
+        objem[$2] = $6
+        cena[$2] = $4 * objem[$2]
+      }else{
+        objem[$2] = 0 - $6
+        cena[$2] = $4 * objem[$2]
+      }
+    } else{
+      if($3 == "buy"){
+        objem[$2] = objem[$2] + $6
+        cena[$2] = $4 * objem[$2]
+      }else{
+       objem[$2] = objem[$2] - $6
+       cena[$2] = $4 * objem[$2]
+      }
+    }
+    };
+
+    END{
+
+        max = 0;
+
+      for(val in cena){
+
+          cena2 = cena[val] * cena[val]
+          cena2 = sqrt(cena2)
+
+          if(cena2 > max){
+            max = cena2
+          }
+      }
+
+      if(width == ""){
+        width = int(max)
+      }
+
+
+        for(val in cena){
+
+          printf "%-9s :", val
+          vysledok = cena[val] * width / max
+          vysledok = int(vysledok)
+
+          if(vysledok < 0){
+            for(i = vysledok; i < 0; i++){
+              if(i == vysledok){
+                printf " !"
+              }else{
+                printf "!"
+              }
+            }
+          }else{
+             for(i = 0; i < vysledok; i++){
+             if(i == 0){
+                printf " #"
+              }else{
+                printf "#"
+              }
+            }
+          }
+          printf "\n"
+        }
+    }'  "$SUBOR" | sort -k1,1
+fi
